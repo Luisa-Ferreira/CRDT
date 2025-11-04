@@ -1,28 +1,30 @@
 //Save the status of each item (e.g., file) 
 // with the last event (add or remove) and its corresponding vector clock.
-
+use crate::vclock::VClock; 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+//CRDT structure
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum OpKind {
     Add,
     Remove,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Op {
     pub kind: OpKind,
     pub wall_time: u64,  // Use Unix timestamp in seconds 
     pub vclock: VClock,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug,Serialize, Deserialize)]
 pub struct ItemState {
     pub last: Op,  // The last known operation
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RWSet {
     pub items: HashMap<String, ItemState>,  // Map of item ID to state
     pub frontier: VClock,  // The largest clock we've seen so far
@@ -104,7 +106,7 @@ impl RWSet {
         }
     }
 
-    pub fn anti_entropy_verify(&mut self, remote_live: &HashMap<String, VClock>, remote_frontier: &VClock, me: &str) -> Vec<Op> {
+    pub fn anti_entropy_verify(&mut self, remote_live: &HashMap<String, VClock>, remote_frontier: &VClock) -> Vec<Op> {
         let mut missing_ops = Vec::new();
 
         for (id, state) in &self.items {
@@ -114,5 +116,9 @@ impl RWSet {
             }
         }
         missing_ops
+    }
+
+    pub fn live_ids(&self) -> Vec<String> {
+        self.items.keys().cloned().collect()
     }
 }

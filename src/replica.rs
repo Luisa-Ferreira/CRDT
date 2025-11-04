@@ -3,10 +3,10 @@ use std::fs;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
-use crate::crdt_set::{RWSet};
+use crate::crdt_set::RWSet;
 use crate::vclock::VClock;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Snapshot {
     pub me: String,
     pub rset: RWSet,
@@ -56,16 +56,14 @@ impl Replica {
         struct Wire<'a> {
             from: &'a str,
             frontier: &'a VClock,
-            live: HashMap<String, &'a VClock>,
+            live: HashMap<String, VClock>,
             full: &'a RWSet, 
         }
 
-        let mut live_map: HashMap<String, &VClock> = HashMap::new();
+        let mut live_map: HashMap<String, VClock> = HashMap::new();
         for id in self.rset.live_ids() {
             if let Some(st) = self.rset.items.get(&id) {
-                if let Some(op) = &st.last {
-                    live_map.insert(id, &op.vclock);
-                }
+                    live_map.insert(id, st.last.vclock.clone());
             }
         }
         let payload = Wire {
@@ -95,9 +93,9 @@ impl Replica {
                 }
                 let w: Wire = serde_json::from_str(&txt).unwrap();
 
-                self.rset.anti_entropy_verify(&w.live, &w.frontier, &self.me);
+                self.rset.anti_entropy_verify(&w.live, &w.frontier);
 
-                let mut cloned = w.full.clone();
+                let cloned = w.full.clone();
                 self.rset.merge(&cloned);
 
                 fs::remove_file(&p)?;
@@ -107,7 +105,7 @@ impl Replica {
     }
 
     pub fn gc_ttl(&mut self, ttl_secs: i64) -> std::io::Result<()> {
-        self.rset.gc_ttl(ttl_secs);
+        self.rset.gc_ttl(ttl_secs.try_into().unwrap());
         self.save()
     }
 }

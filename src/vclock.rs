@@ -1,45 +1,44 @@
-import java.util.HashMap;
-//A map (HashMap<String, u64>) that stores the counter for each replica.
-//Example: { "A": 5, "B": 3 } means that A performed 5 operations and B performed 3.
+use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 
-class VectorClock {
-    private HashMap<String, u64> counterReplica;
+/// Vector Clock structure
+/// Keeps track of the number of operations observed by each replica.
+/// Example: {"A": 5, "B": 3} means replica A performed 5 operations and B performed 3.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VClock(pub HashMap<String, u64>);
 
-    public VectorClock() {
-        this.counterReplica = new HashMap<String, u64>();
+impl VClock {
+    /// Increments the counter of the given replica ID.
+    pub fn inc(&mut self, replica_id: &str) {
+        *self.0.entry(replica_id.to_string()).or_insert(0) += 1;
     }
 
-    public void increment(String replicaId) {
-        this.counterReplica.put(replicaId, this.counterReplica.getOrDefault(replicaId, 0) + 1);
-    }
-
-    public void merge_max(VectorClock other) {
-        //gets the other vector and compares with the actual one, keeping the maximum value (recent one) in each replica
-        for (String key : other.getCounterReplica().keySet()) {
-            u64 otherValue = other.getCounterReplica().get(key);
-            u64 thisValue = this.counterReplica.getOrDefault(key, 0);
-            this.counterReplica.put(key, Math.max(thisValue, otherValue));
+    /// Merges this clock with another by taking the maximum counter value per replica.
+    /// Ensures monotonicity and eventual convergence.
+    pub fn merge_max(&mut self, other: &VClock) {
+        for (replica, value) in &other.0 {
+            let entry = self.0.entry(replica.clone()).or_insert(0);
+            if *entry < *value {
+                *entry = *value;
+            }
         }
     }
 
-    public less_equal(VectorClock a, VectorClock b) {
-        ''' return true if, for example, A (other) saw everything that B have seen. A is updated about B'''
-        for (String key : a.getCounterReplica().keySet()) {
-            u64 aValue = a.getCounterReplica().get(key);
-            u64 bValue = b.getCounterReplica().getOrDefault(key, 0);
-            if (aValue > bValue) {
+    /// Returns true if this clock is less than or equal to the other clock,
+    /// meaning it has seen no events that the other hasn't.
+    pub fn less_equal(&self, other: &VClock) -> bool {
+        for (replica, my_val) in &self.0 {
+            let other_val = other.0.get(replica).cloned().unwrap_or(0);
+            if my_val > &other_val {
                 return false;
             }
         }
-        return true;
+        true
     }
 
-    public concurrent (VectorClock a, VectorClock b) {
-        // A os updated about B and B is updated about A. Both have seens the exact same operations
-        return !less_equal(a, b) && !less_equal(b, a);
-    }
-
-    public HashMap<String, u64> getCounterReplica() {
-        return this.counterReplica;
+    /// Returns true if this and the other clock are concurrent —
+    /// neither dominates the other (each has unseen events from the other).
+    pub fn concurrent(&self, other: &VClock) -> bool {
+        !self.less_equal(other) && !other.less_equal(self)
     }
 }
