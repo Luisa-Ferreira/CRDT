@@ -1,0 +1,113 @@
+use std::path::PathBuf;
+use std::fs;
+use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
+
+use crate::crdt_set::{RWSet};
+use crate::vclock::VClock;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub me: String,
+    pub rset: RWSet,
+}
+
+pub struct Replica {
+    pub me: String,
+    root: PathBuf,         // ex.: replicas/A
+    inbox: PathBuf,        // ex.: replicas/A/inbox
+    state_path: PathBuf,   // ex.: replicas/A/state.json
+    pub rset: RWSet,
+}
+
+impl Replica {
+    pub fn open(me: &str, root: PathBuf) -> std::io::Result<Self> {
+        let inbox = root.join("inbox");
+        fs::create_dir_all(&inbox)?;
+        let state_path = root.join("state.json");
+        let rset = if state_path.exists() {
+            let txt = fs::read_to_string(&state_path)?;
+            serde_json::from_str::<Snapshot>(&txt).map(|s| s.rset).unwrap_or_default()
+        } else { RWSet::default() };
+
+        Ok(Self { me: me.to_string(), root, inbox, state_path, rset })
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let snap = Snapshot { me: self.me.clone(), rset: self.rset.clone() };
+        fs::write(&self.state_path, serde_json::to_string_pretty(&snap).unwrap())
+    }
+
+    pub fn add(&mut self, id: &str) -> std::io::Result<()> {
+        self.rset.add(&self.me, id);
+        self.save()
+    }
+
+    pub fn remove(&mut self, id: &str) -> std::io::Result<()> {
+        self.rset.remove(&self.me, id);
+        self.save()
+    }
+
+    pub fn list(&self) -> Vec<String> { self.rset.live_ids() }
+
+    pub fn send_state_to(&self, other_inbox: PathBuf) -> std::io::Result<()> {
+        fs::create_dir_all(&other_inbox)?;
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            from: &'a str,
+            frontier: &'a VClock,
+            live: HashMap<String, &'a VClock>,
+            full: &'a RWSet, 
+        }
+
+        let mut live_map: HashMap<String, &VClock> = HashMap::new();
+        for id in self.rset.live_ids() {
+            if let Some(st) = self.rset.items.get(&id) {
+                if let Some(op) = &st.last {
+                    live_map.insert(id, &op.vclock);
+                }
+            }
+        }
+        let payload = Wire {
+            from: &self.me,
+            frontier: &self.rset.frontier,
+            live: live_map,
+            full: &self.rset,
+        };
+        let tmp = other_inbox.join("incoming.json");
+        fs::write(&tmp, serde_json::to_string(&payload).unwrap())?;
+        let finalp = other_inbox.join(format!("state_from_{}.json", self.me));
+        fs::rename(tmp, finalp)
+    }
+
+    pub fn receive_and_merge(&mut self) -> std::io::Result<()> {
+        for entry in fs::read_dir(&self.inbox)? {
+            let p = entry?.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("json") {
+                let txt = fs::read_to_string(&p)?;
+                // struture received
+                #[derive(Deserialize)]
+                struct Wire {
+                    from: String,
+                    frontier: VClock,
+                    live: HashMap<String, VClock>,
+                    full: RWSet,
+                }
+                let w: Wire = serde_json::from_str(&txt).unwrap();
+
+                self.rset.anti_entropy_verify(&w.live, &w.frontier, &self.me);
+
+                let mut cloned = w.full.clone();
+                self.rset.merge(&cloned);
+
+                fs::remove_file(&p)?;
+            }
+        }
+        self.save()
+    }
+
+    pub fn gc_ttl(&mut self, ttl_secs: i64) -> std::io::Result<()> {
+        self.rset.gc_ttl(ttl_secs);
+        self.save()
+    }
+}

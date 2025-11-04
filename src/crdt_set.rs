@@ -1,89 +1,118 @@
 //Save the status of each item (e.g., file) 
 // with the last event (add or remove) and its corresponding vector clock.
 
-Enum OpKind {
-    ADD,
-    REMOVE
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpKind {
+    Add,
+    Remove,
 }
 
-Struct Op {
-    String kind; // add or remove
-    Time wall_time;
-    VectorClock vclock;
+#[derive(Clone, Debug)]
+pub struct Op {
+    pub kind: OpKind,
+    pub wall_time: u64,  // Use Unix timestamp in seconds 
+    pub vclock: VClock,
 }
 
-Struct ItemState {
-    Op last;//last event known
+#[derive(Clone, Debug)]
+pub struct ItemState {
+    pub last: Op,  // The last known operation
 }
 
-Struct RWSet {
-    HashMap<String, ItemState> items; // Map of item ID to its state
-    VectorClock frontier; // bigger clock seen so far
+#[derive(Clone, Debug, Default)]
+pub struct RWSet {
+    pub items: HashMap<String, ItemState>,  // Map of item ID to state
+    pub frontier: VClock,  // The largest clock we've seen so far
 }
 
-private apply (id, op){
-    if (!this.items.containsKey(id)) {
-        this.items.put(id, new ItemState(op));
-        return;
-    }
 
-    ItemState currentState = this.items.get(id);
-    if (VectorClock.less_equal(currentState.last.vclock, op.vclock)) {
-        this.items.put(id, new ItemState(op));
-        this.frontier.merge_max(op.vclock);
-    }else if (VectorClock.concurrent(currentState.last.vclock, op.vclock)) {
-        if (op.kind == OpKind.REMOVE) {
-            this.items.put(id, new ItemState(op));
-            this.frontier.merge_max(op.vclock);
-        }else if (currentState.last.kind == OpKind.REMOVE) {
-            this.items.put(id, new ItemState(op));
-            this.frontier.merge_max(op.vclock);
+impl RWSet {
+    pub fn apply(&mut self, id: &str, op: Op) {
+        if !self.items.contains_key(id) {
+            self.items.insert(id.to_string(), ItemState { last: op });
+            return;
+        }
+
+        let current_state = self.items.get_mut(id).unwrap();
+        let current_op = &current_state.last;
+
+        // Compare current op with the new op
+        if current_op.vclock.less_equal(&op.vclock) {
+            // New operation is greater, apply it
+            current_state.last = op.clone();
+            self.frontier.merge_max(&op.vclock);
+        } else if current_op.vclock.concurrent(&op.vclock) {
+            // If the operations are concurrent, apply the remove operation first
+            if op.kind == OpKind::Remove {
+                current_state.last = op.clone();
+                self.frontier.merge_max(&op.vclock);
+            } else if current_op.kind == OpKind::Remove {
+                // If the current state was removed and the new op is add, apply the add
+                current_state.last = op.clone();
+                self.frontier.merge_max(&op.vclock);
+            }
         }
     }
-}
-
-add(me, id){
-    VectorClock newClock = this.frontier.clone();
-    newClock.increment(me);
-    Op newOp = new Op(OpKind.ADD, Time.now(), newClock);
-    this.apply(id, newOp);
-}
-
-remove(me, int id){
-    VectorClock newClock = this.frontier.clone();
-    newClock.increment(me);
-    Op newOp = new Op(OpKind.REMOVE, Time.now(), newClock);
-    this.apply(id, newOp);
-}
-
-merge(other){
-    //une the two sets by applying the last operation of each item from the other set
-    for (String id : other.items.keySet()) {
-        Op otherOp = other.items.get(id).last;
-        this.apply(id, otherOp);
+    pub fn add(&mut self, me: &str, id: &str) {
+        let mut new_clock = self.frontier.clone();
+        new_clock.inc(me);
+        let new_op = Op {
+            kind: OpKind::Add,
+            wall_time: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            vclock: new_clock,
+        };
+        self.apply(id, new_op);
     }
-}
 
-gc_ttl(ttl_secs){
-    Time now = Time.now();
-    for (String id : this.items.keySet()) {
-        Op op = this.items.get(id).last;
-        //remove old tombstones
-        if (op.kind == OpKind.REMOVE && now - op.wall_time > ttl_secs) {
-            this.items.remove(id);
+    pub fn remove(&mut self, me: &str, id: &str) {
+        let mut new_clock = self.frontier.clone();
+        new_clock.inc(me);
+        let new_op = Op {
+            kind: OpKind::Remove,
+            wall_time: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            vclock: new_clock,
+        };
+        self.apply(id, new_op);
+    }
+
+    pub fn merge(&mut self, other: &RWSet) {
+        for (id, other_state) in &other.items {
+            let other_op = &other_state.last;
+            self.apply(id, other_op.clone());
         }
     }
-}
 
-// garantee that "zombie" items are not created during anti-entropy
-anti_entropy_verify(remote_live, remote_frontier, me){
-    // Verify which operations the remote replica is missing
-    List<Op> missing_ops = new List<Op>();
-    for (String id : this.items.keySet()) {
-        Op op = this.items.get(id).last;
-        if (!VectorClock.less_equal(op.vclock, remote_frontier)) {
-            missing_ops.add(op);
+    pub fn gc_ttl(&mut self, ttl_secs: u64) {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
+        let keys_to_remove: Vec<String> = self.items.iter()
+            .filter_map(|(id, state)| {
+                let op = &state.last;
+                if op.kind == OpKind::Remove && now - op.wall_time > ttl_secs {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for key in keys_to_remove {
+            self.items.remove(&key);
         }
     }
-    return missing_ops;
+
+    pub fn anti_entropy_verify(&mut self, remote_live: &HashMap<String, VClock>, remote_frontier: &VClock, me: &str) -> Vec<Op> {
+        let mut missing_ops = Vec::new();
+
+        for (id, state) in &self.items {
+            let op = &state.last;
+            if !remote_live.contains_key(id) || !op.vclock.less_equal(remote_frontier) {
+                missing_ops.push(op.clone());
+            }
+        }
+        missing_ops
+    }
 }
