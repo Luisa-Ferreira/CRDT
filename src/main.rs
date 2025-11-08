@@ -5,7 +5,7 @@ use crdt_sss_rs::replica::Replica;
 #[derive(Parser)]
 #[command(version, about="CRDT-SSS (begineer) with Vector Clock + TTL + verify in sync")]
 struct Cli {
-    /// replica ID (ex.: A ou B)
+    /// replica ID (ex.: A or B)
     #[arg(long)]
     replica: String,
 

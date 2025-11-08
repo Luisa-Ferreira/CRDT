@@ -74,19 +74,37 @@ impl Replica {
         };
         let tmp = other_inbox.join("incoming.json");
         fs::write(&tmp, serde_json::to_string(&payload).unwrap())?;
+        eprintln!("State sent to: {:?}", tmp);
+
         let finalp = other_inbox.join(format!("state_from_{}.json", self.me));
-        fs::rename(tmp, finalp)
+        fs::rename(tmp, finalp)?;
+
+        Ok(())
     }
 
     pub fn receive_and_merge(&mut self) -> std::io::Result<()> {
-        for entry in fs::read_dir(&self.inbox)? {
-            let p = entry?.path();
+
+        if !self.inbox.exists() {
+            return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Inbox directory not found"));
+        }
+        let inbox_dir = &self.inbox;
+        eprintln!("Checking inbox at: {:?}", inbox_dir); 
+
+        let entries: Vec<_> = fs::read_dir(inbox_dir)?
+            .filter_map(Result::ok) // Filtra erros, se houver
+            .collect();
+
+        if entries.is_empty() {
+            eprintln!("Inbox directory is empty.");
+        }
+
+        for entry in entries {
+            let p = entry.path();
             if p.extension().and_then(|s| s.to_str()) == Some("json") {
                 let txt = fs::read_to_string(&p)?;
                 // struture received
                 #[derive(Deserialize)]
                 struct Wire {
-                    from: String,
                     frontier: VClock,
                     live: HashMap<String, VClock>,
                     full: RWSet,
@@ -105,7 +123,9 @@ impl Replica {
     }
 
     pub fn gc_ttl(&mut self, ttl_secs: i64) -> std::io::Result<()> {
+        //if a kind= delete, wall_time is older than ttl_secs, remove it from the set
         self.rset.gc_ttl(ttl_secs.try_into().unwrap());
         self.save()
     }
+    
 }

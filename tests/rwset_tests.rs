@@ -2,8 +2,11 @@
 mod tests {
    
     use crdt_sss_rs::vclock::VClock;
-    use crdt_sss_rs::crdt_set::{OpKind, RWSet};
+    use crdt_sss_rs::crdt_set::{OpKind, RWSet, Op};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+
+    //crdt_set tests
 
     // Test for adding an item
     #[test]
@@ -18,6 +21,20 @@ mod tests {
         assert_eq!(item_state.last.kind, OpKind::Add);
     }
 
+    #[test]
+    fn test_apply_add() {
+        let mut rw_set = RWSet::default();
+        let op_add = Op {
+            kind: OpKind::Add,
+            wall_time: 100,
+            vclock: VClock::default(),
+        };
+        rw_set.apply("item1", op_add.clone());
+
+        let item_state = rw_set.items.get("item1").unwrap();
+        assert_eq!(item_state.last.kind, OpKind::Add);
+    }
+
     // Test for removing an item
     #[test]
     fn test_remove_item() {
@@ -28,6 +45,20 @@ mod tests {
         rw_set.remove("replica_A", "item1");
 
         // Verify the item is removed
+        let item_state = rw_set.items.get("item1").unwrap();
+        assert_eq!(item_state.last.kind, OpKind::Remove);
+    }
+
+    #[test]
+    fn test_apply_remove() {
+        let mut rw_set = RWSet::default();
+        let op_remove = Op {
+            kind: OpKind::Remove,
+            wall_time: 100,
+            vclock: VClock::default(),
+        };
+        rw_set.apply("item1", op_remove.clone());
+
         let item_state = rw_set.items.get("item1").unwrap();
         assert_eq!(item_state.last.kind, OpKind::Remove);
     }
@@ -88,4 +119,7 @@ mod tests {
         // Check that missing_ops contains "item2", since the remote replica doesn't know about it
         assert!(missing_ops.iter().any(|op| op.vclock == rw_set_2.items["item2"].last.vclock));
     }
+
+
+
 }
