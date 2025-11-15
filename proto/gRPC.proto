@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package replica;
+
+message StateRequest {
+    string from = 1;
+    map<string, string> items = 2; // Items do estado, mapeamento de chave/valor
+}
+
+message StateResponse {
+    bool success = 1;
+}
+
+service ReplicaService {
+    rpc SendState(StateRequest) returns (StateResponse);
+    rpc ReceiveState(StateRequest) returns (StateResponse);
+}

@@ -6,6 +6,10 @@ use std::collections::HashMap;
 use crate::crdt_set::RWSet;
 use crate::vclock::VClock;
 
+use tonic::transport::{ClientTlsConfig, Channel};
+use tonic::tls::Identity;
+
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Snapshot {
     pub me: String,
@@ -127,5 +131,28 @@ impl Replica {
         self.rset.gc_ttl(ttl_secs.try_into().unwrap());
         self.save()
     }
-    
+
+   
+    pub async fn send_state_via_grpc(&self, peer_url_base: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let channel = Channel::from_shared(format!("{}/state/receive", peer_url_base))?
+            .tls_config(mtls_configuration())? // Configuração mTLS
+            .connect()
+            .await?;
+
+        let mut client = ReplicaServiceClient::new(channel);
+
+        let request = StateRequest {
+            from: self.me.clone(),
+            items: self.rset.items.iter().map(|(key, value)| (key.clone(), value.to_string())).collect(),
+        };
+
+        let response = client.send_state(Request::new(request)).await?.into_inner();
+        
+        if response.success {
+            Ok(())
+        } else {
+            Err("Falha ao enviar estado".into())
+        }
+    }
+
 }

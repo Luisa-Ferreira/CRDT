@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::{path::PathBuf, net::SocketAddr};
 use crdt_sss_rs::replica::Replica;
+use crdt_sss_rs::net::start_http_server;
+use std::sync::{Arc, Mutex};
 
 #[derive(Parser)]
 #[command(version, about="CRDT-SSS (begineer) with Vector Clock + TTL + verify in sync")]
@@ -21,11 +23,14 @@ enum Cmd {
     Add { id: String },
     Rm { id: String },
     List,
-    Sync { #[arg(long)] to: Option<PathBuf>, #[arg(long)] recv: bool },
+    Serve { #[arg(long, default_value = "127.0.0.1:8080")] listen: String },
+    SyncHttp { #[arg(long)] to: String },
     Gc { #[arg(long, default_value_t = 3600)] ttl_secs: i64 },
 }
 
-fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
     let mut r = Replica::open(&cli.replica, cli.root.clone())?;
 
@@ -33,9 +38,17 @@ fn main() -> std::io::Result<()> {
         Cmd::Add { id } => { r.add(&id)?; println!("OK add {}", id); }
         Cmd::Rm { id } => { r.remove(&id)?; println!("OK rm {}", id); }
         Cmd::List => { println!("{:?}", r.list()); }
-        Cmd::Sync { to, recv } => {
-            if let Some(dst) = to { r.send_state_to(dst)?; println!("OK enviado"); }
-            if recv { r.receive_and_merge()?; println!("OK recebido/merge"); }
+        Cmd::Serve { listen } => {
+            let addr: SocketAddr = listen.parse().expect("invalid addr");
+            let shared = Arc::new(Mutex::new(r));
+            start_http_server(shared, addr).await;
+        }
+        Cmd::SyncHttp { to } => {
+            let r = Replica::open(&cli.replica, cli.root.clone())?;
+            match r.send_state_http(&to).await {
+                Ok(_) => println!("OK enviado HTTP"),
+                Err(e) => eprintln!("Erro: {e:?}"),
+            }
         }
         Cmd::Gc { ttl_secs } => { r.gc_ttl(ttl_secs)?; println!("OK gc ttl={}s", ttl_secs); }
     }
